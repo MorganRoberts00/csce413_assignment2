@@ -1,85 +1,74 @@
-#!/usr/bin/env python3
-"""Starter template for the port knocking server."""
-
-import argparse
-import logging
 import socket
+import subprocess
 import time
+import logging
+import threading
 
-DEFAULT_KNOCK_SEQUENCE = [1234, 5678, 9012]
-DEFAULT_PROTECTED_PORT = 2222
-DEFAULT_SEQUENCE_WINDOW = 10.0
+# config
+SEQUENCE = [1234, 5678, 9012]
+PROTECTED_PORT = 2222
+WINDOW = 10
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
-def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler()],
-    )
+def start_dummy_service():
+    """Listens on 2222 so the connection isn't refused."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(('0.0.0.0', PROTECTED_PORT))
+        s.listen(5)
+        logging.info(f"[*] Service Thread: Listening on {PROTECTED_PORT}")
+        while True:
+            conn, addr = s.accept()
+            with conn:
+                logging.info(f"[!] SUCCESS: Connection accepted from {addr}")
+                conn.sendall(b"You have passed the trial. Welcome.\n")
 
+def manage_iptables(ip, action="insert"):
+    flag = "-I" if action == "insert" else "-D"
+    cmd = ["iptables", flag, "INPUT", "1", "-p", "tcp", "-s", ip, "--dport", str(PROTECTED_PORT), "-j", "ACCEPT"]
+    subprocess.run(cmd)
 
-def open_protected_port(protected_port):
-    """Open the protected port using firewall rules."""
-    # TODO: Use iptables/nftables to allow access to protected_port.
-    logging.info("TODO: Open firewall for port %s", protected_port)
+def listen_for_knocks():
+    progress = {}
+    socks = []
+    for port in SEQUENCE:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(('0.0.0.0', port))
+        s.setblocking(False)
+        socks.append(s)
 
-
-def close_protected_port(protected_port):
-    """Close the protected port using firewall rules."""
-    # TODO: Remove firewall rules for protected_port.
-    logging.info("TODO: Close firewall for port %s", protected_port)
-
-
-def listen_for_knocks(sequence, window_seconds, protected_port):
-    """Listen for knock sequence and open the protected port."""
-    logger = logging.getLogger("KnockServer")
-    logger.info("Listening for knocks: %s", sequence)
-    logger.info("Protected port: %s", protected_port)
-
-    # TODO: Create UDP or TCP listeners for each knock port.
-    # TODO: Track each source IP and its progress through the sequence.
-    # TODO: Enforce timing window per sequence.
-    # TODO: On correct sequence, call open_protected_port().
-    # TODO: On incorrect sequence, reset progress.
+    logging.info(f"[*] Knock Server: Monitoring ports {SEQUENCE}")
 
     while True:
-        time.sleep(1)
+        for i, s in enumerate(socks):
+            try:
+                _, addr = s.recvfrom(1024)
+                ip, port_rec = addr[0], SEQUENCE[i]
+                now = time.time()
 
+                if ip not in progress or (now - progress[ip]['time']) > WINDOW:
+                    progress[ip] = {'index': 0, 'time': now}
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Port knocking server starter")
-    parser.add_argument(
-        "--sequence",
-        default=",".join(str(port) for port in DEFAULT_KNOCK_SEQUENCE),
-        help="Comma-separated knock ports",
-    )
-    parser.add_argument(
-        "--protected-port",
-        type=int,
-        default=DEFAULT_PROTECTED_PORT,
-        help="Protected service port",
-    )
-    parser.add_argument(
-        "--window",
-        type=float,
-        default=DEFAULT_SEQUENCE_WINDOW,
-        help="Seconds allowed to complete the sequence",
-    )
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    setup_logging()
-
-    try:
-        sequence = [int(port) for port in args.sequence.split(",")]
-    except ValueError:
-        raise SystemExit("Invalid sequence. Use comma-separated integers.")
-
-    listen_for_knocks(sequence, args.window, args.protected_port)
-
+                if port_rec == SEQUENCE[progress[ip]['index']]:
+                    progress[ip]['index'] += 1
+                    if progress[ip]['index'] == len(SEQUENCE):
+                        manage_iptables(ip, "insert")
+                        del progress[ip]
+                else:
+                    if ip in progress: del progress[ip]
+            except BlockingIOError:
+                continue
+        time.sleep(0.1)
 
 if __name__ == "__main__":
-    main()
+    # wipe iptables and set drop by default on protected port
+    subprocess.run(["iptables", "-F", "INPUT"])
+    subprocess.run(["iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(PROTECTED_PORT), "-j", "DROP"])
+
+    # start service thread 
+    service_thread = threading.Thread(target=start_dummy_service, daemon=True)
+    service_thread.start()
+
+    # listen for knocks
+    listen_for_knocks()
