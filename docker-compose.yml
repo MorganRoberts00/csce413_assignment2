@@ -105,7 +105,7 @@ services:
     container_name: 2_network_port_knocking
     build:
       context: ./port_knocking
-      network: host
+      # network: host
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -125,3 +125,4 @@ networks:
 
 volumes:
   db_data:
+
