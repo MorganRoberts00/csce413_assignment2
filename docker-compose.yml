@@ -86,19 +86,17 @@ services:
   # TODO: Feel free to update honeypot if needed
   honeypot:
     container_name: 2_network_honeypot
-    build:
-      context: ./honeypot
-      network: host
+    image: cowrie/cowrie:latest
     dns:
       - 8.8.8.8
       - 1.1.1.1
     ports:
-      - "2222:22"
+      - "2222:2222"
     networks:
       vulnerable_network:
         ipv4_address: 172.20.0.30
     volumes:
-      - ./honeypot/logs:/app/logs
+      - cowrie_data:/cowrie/cowrie-git/var
 
   # TODO: Feel free to update port_knocking if needed
   port_knocking:
@@ -125,4 +123,5 @@ networks:
 
 volumes:
   db_data:
+  cowrie_data:
 
